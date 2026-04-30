@@ -3,6 +3,12 @@
 # python scatter_plot_revised.py
 
 #pip install scipy
+import os
+
+dir = '/home/sehwahong/GuidedMission/01.result'
+os.chdir(dir)
+print(os.getcwd())
+
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
