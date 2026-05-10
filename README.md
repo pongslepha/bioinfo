@@ -14,3 +14,13 @@ script:
     
 result:
     01.result/RPF_density_near_start_codon.png
+
+### Guided mission 3
+script: 
+    xx.script/CIMS.py
+    
+result:
+    01.result/CLIP-let7g-gene.ucsc.bedgraph
+    01.result/CLIP-let7d-gene.ucsc.bedgraph
+    01.result/CLIP-let7f-1-gene.ucsc.bedgraph
+    

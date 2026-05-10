@@ -1,0 +1,6 @@
+track type=bedGraph name="CLIP-let7g entropy" description="Shannon entropy of CLIP base composition at Mirlet7g" visibility=full autoScale=off alwaysZero=on viewLimits=0:2 graphType=bar windowingFunction=maximum
+chr9	106056068	106056069	0.258019
+chr9	106056093	106056094	1.468163
+chr9	106056094	106056095	0.300814
+chr9	106056109	106056110	0.066780
+chr9	106056114	106056115	0.065491
