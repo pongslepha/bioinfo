@@ -36,7 +36,12 @@ result:
 
 ### Own analysis 1
 script:
-    xx.script/01.download_geo.py / xx.script/01.download_geo.R
+
+    # python
+    xx.script/01.download_geo.py
+    
+    # R
+    xx.script/01.download_geo.R
     
     
     
