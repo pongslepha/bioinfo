@@ -34,5 +34,9 @@ result:
     01.result/hgt_genome_let7f-1.pdf
     
 
+### Own analysis 1
+script:
+    xx.script/01.download_geo.py / xx.script/01.download_geo.R
+    
     
     
