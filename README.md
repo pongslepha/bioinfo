@@ -44,4 +44,18 @@ script:
     xx.script/01.download_geo.R
     
     
+### Own analysis 2
+foler:
+
+    # agent setting
+    agent/
     
+
+    
+### Own analysis 3
+foler:
+
+    # agent setting for pathway analysis
+    agent/
+    
+

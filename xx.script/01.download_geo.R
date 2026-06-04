@@ -5,7 +5,21 @@
 gse_ids <- c("GSE39872", "GSE134033", "GSE37114")
 
 # 2. Output directory
-dest_dir <- "../00.data/GEO"
+# Determine script directory dynamically to make it robust
+get_script_path <- function() {
+  cmd_args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("--file=", cmd_args, value = TRUE)
+  if (length(file_arg) > 0) {
+    return(sub("--file=", "", file_arg))
+  } else {
+    # Fallback to default if run interactively in R console
+    return("xx.script/01.download_geo.R")
+  }
+}
+
+script_dir <- dirname(normalizePath(get_script_path(), mustWork = FALSE))
+dest_dir <- file.path(script_dir, "../00.data/GEO")
+
 if (!dir.exists(dest_dir)) {
   dir.create(dest_dir, recursive = TRUE)
   message("Created output directory: ", dest_dir)

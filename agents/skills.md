@@ -67,10 +67,28 @@
 
 ---
 
+## Pathway & Enrichment Analysis
+**Task**: Perform pathway enrichment and functional interpretation for DEG or peak-associated gene sets.
+
+**Tools**: `gprofiler2` (R), `clusterProfiler` (R), g:Profiler web API
+
+**Steps**:
+1. Prepare gene lists from differential expression or CLIP peak annotation
+2. Query g:Profiler via `gprofiler2` for GO terms, pathways, and regulatory motifs
+3. Compare human and mouse pathway results to identify conserved and ESC-specific functions
+4. Export tables and generate enrichment plots
+
+**Output Formats**:
+- Pathway results: .csv (term, source, p-value, adjusted p-value, genes)
+- Enrichment plots: .png (barplot, dotplot, category network)
+- Cross-species comparison: .txt/.csv summary tables
+
+---
+
 ## Statistical Testing & Visualization
 **Task**: Perform statistical tests and generate publication-ready plots.
 
-**Tools**: `ggplot2`, `ComplexHeatmap`, `EnhancedVolcano` (R), `plotly`, `matplotlib` (Python optional)
+**Tools**: `ggplot2`, `ComplexHeatmap`, `EnhancedVolcano` (R), `clusterProfiler`, `plotly`, `matplotlib` (Python optional)
 
 **Common Tasks**:
 - Volcano plots (log2FC vs -log10(p-value))

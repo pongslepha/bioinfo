@@ -30,14 +30,17 @@ The Bioinformatics Agent is a specialized workflow orchestrator for omics data a
 2. **Normalization**: Batch correction if needed; DESeq2/TMM normalization
 3. **Differential Expression**: Fit GLM model → logFC, p-value, adjusted p-value per gene
 4. **Visualization**: Volcano plot, MA plot, heatmap
+5. **Pathway Analysis**: Run g:Profiler via `gprofiler2` on DEG gene sets and compare human/mouse pathways
 
 **Output** (in order of priority):
 - DEG table: `{prefix}_DEG_results.csv` (Gene, logFC, log10(p), baseMean, padj)
+- Pathway table: `{prefix}_gprofiler_results.csv` (term, source, p-value, padj, genes)
+- Pathway plot: `{prefix}_gprofiler_dotplot.png` or `{prefix}_gprofiler_barplot.png`
 - QC plots: `{prefix}_qc_distribution.png`, `{prefix}_pca.png`
 - Expression matrix (normalized): `{prefix}_normalized.csv` or `.RData`
-- Full report: `{prefix}_analysis_log.txt` (steps, thresholds, gene counts)
+- Full report: `{prefix}_analysis_log.txt` (steps, thresholds, gene counts, pathway summary)
 
-**Tools**: R (DESeq2, limma, ggplot2), bash (pipeline orchestration)
+**Tools**: R (DESeq2, limma, ggplot2, gprofiler2), bash (pipeline orchestration)
 
 ---
 
@@ -46,16 +49,37 @@ The Bioinformatics Agent is a specialized workflow orchestrator for omics data a
 **Process**:
 1. **Peak Merging**: Combine replicates; consolidate overlapping peaks
 2. **Annotation**: Map peaks to genes, exons, UTRs, promoters via GenomicRanges
-3. **Enrichment**: Motif discovery; pathway/gene-set enrichment
+3. **Enrichment**: Motif discovery; pathway/gene-set enrichment using g:Profiler
 4. **Integration**: Correlate with expression data (if available)
 
 **Output**:
 - Merged peaks: `{protein}_merged_peaks.bed` (chrom, start, end, peak_id, score)
 - Annotations: `{protein}_peak_annotations.csv` (peak, gene, feature_type, strand)
+- Pathway table: `{protein}_gprofiler_peak_results.csv`
 - Motifs: `{protein}_motif_enrichment.txt` (motif, p-value, n_peaks)
 - Visualizations: `{protein}_peak_distribution.png`, `{protein}_upset_plot.png`
 
-**Tools**: R (GenomicRanges, rtracklayer), bash (bedtools, samtools)
+**Tools**: R (GenomicRanges, rtracklayer, gprofiler2), bash (bedtools, samtools)
+
+---
+
+## Pathway Enrichment & Comparative Analysis
+**Task**: Assess whether LIN28-associated gene regulation is ESC-specific or conserved across tissues and species.
+
+**Input**: DEG sets from human GSE39872 and mouse GSE134033, LIN28/CLIP peak-associated gene lists  
+**Process**:
+1. Run g:Profiler on human and mouse gene sets separately
+2. Map mouse gene IDs to human orthologs when needed for comparison
+3. Identify conserved pathways, GO terms, and regulatory signatures
+4. Compare hESC results to mouse testis and other tissues for shared versus ESC-specific functions
+
+**Output**:
+- Cross-species summary: `LIN28_hESC_mouse_testis_pathway_comparison.csv`
+- Ortholog mapping: `mouse2human_orthologs.csv`
+- Enrichment summary: `LIN28_cross_tissue_pathway_summary.txt`
+- Comparison plots: `LIN28_pathway_conservation.png`
+
+**Tools**: R (`gprofiler2`, `biomaRt`, `clusterProfiler`), bash, g:Profiler API
 
 ---
 
