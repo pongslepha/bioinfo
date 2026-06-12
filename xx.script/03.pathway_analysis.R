@@ -16,6 +16,32 @@ library(ggrepel)
 ############################################################
 ## 0. Paths
 ############################################################
+## 상대경로(../01.result 등)는 작업 디렉토리 기준이라, 실행 위치에
+## 따라 깨진다. 스크립트(.R)가 있는 폴더(xx.script)를 찾아 그 기준으로
+## 작업 디렉토리를 맞춰, 어디서 실행하든 동일하게 동작하게 한다.
+get_script_dir <- function() {
+  ## 1) Rscript 실행: --file= 인자
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(file_arg) > 0) {
+    return(dirname(normalizePath(sub("^--file=", "", file_arg[1]))))
+  }
+  ## 2) source("...") 실행: sys.frame 의 ofile
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of)) return(dirname(normalizePath(of)))
+  }
+  ## 3) RStudio "Source" 버튼 등: 활성 문서 경로
+  if (requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {
+    p <- rstudioapi::getActiveDocumentContext()$path
+    if (nzchar(p)) return(dirname(normalizePath(p)))
+  }
+  ## 4) 모두 실패하면 현재 작업 디렉토리 사용
+  getwd()
+}
+
+setwd(get_script_dir())
+cat("Working directory set to:", getwd(), "\n")
 
 result_dir <- "../01.result"
 data_dir   <- "../00.data"
@@ -442,10 +468,12 @@ run_go_ontology <- function(ont) {
     file.path(output_dir, paste0("GO_", ont, "_enrichment_stats.csv"))
   )
 
-  ## 유의도 상위 25개 term 만 라벨링
+  ## ----- Figure 5A-like bubble plot -----
+  ## term 마다 점 하나: x = mean CLIP enrichment, y = mean ribosome density
+  ## change, 점 크기 = 유전자 수, 색 = -log10(FDR). 유의도 상위 25개만 라벨링.
   label_go <- go_stats %>% slice_head(n = 25)
 
-  p_go <- ggplot(
+  p_bubble <- ggplot(
     go_stats %>% arrange(neglog10_fdr),  # 유의한(빨간) 점이 맨 위에 그려지도록
     aes(
       x = mean_clip_enrichment,
@@ -455,10 +483,7 @@ run_go_ontology <- function(ont) {
     geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
     geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
     geom_point(
-      aes(
-        size = n_genes,
-        color = neglog10_fdr
-      ),
+      aes(size = n_genes, color = neglog10_fdr),
       alpha = 0.75
     ) +
     geom_text_repel(
@@ -467,14 +492,9 @@ run_go_ontology <- function(ont) {
       size = 3,
       max.overlaps = Inf
     ) +
-    scale_size_continuous(
-      range = c(2, 14),
-      name = "Number of genes"
-    ) +
+    scale_size_continuous(range = c(2, 14), name = "Number of genes") +
     scale_color_gradient(
-      low = "khaki1",
-      high = "red4",
-      name = "-log10(FDR)"
+      low = "khaki1", high = "red4", name = "-log10(FDR)"
     ) +
     labs(
       title = paste0(
@@ -492,9 +512,85 @@ run_go_ontology <- function(ont) {
 
   ggsave(
     file.path(output_dir, paste0("GO_", ont, "_Figure5A_like.png")),
-    p_go,
+    p_bubble,
     width = 12,
     height = 7,
+    dpi = 900
+  )
+
+  ## ----- Dot (lollipop) plot -----
+  ## 두 지표(CLIP enrichment / ribosome density change) × 효과 방향(Positive/
+  ## Negative) 으로 facet 을 나누고, 각 칸마다 FDR 상위 n_top 개 term 을
+  ## -log10(FDR) lollipop 으로 표시. 점 크기 = 유전자 수.
+  n_top <- 10
+
+  metric_levels <- c("CLIP enrichment", "Ribosome density change")
+  dir_levels    <- c("Positive", "Negative")
+
+  go_long <- bind_rows(
+    go_stats %>% transmute(
+      TERM, n_genes, metric = "CLIP enrichment",
+      fdr = clip_fdr, effect = mean_clip_enrichment
+    ),
+    go_stats %>% transmute(
+      TERM, n_genes, metric = "Ribosome density change",
+      fdr = ribo_fdr, effect = mean_ribo_density_change
+    )
+  ) %>%
+    filter(fdr < 0.05) %>%
+    mutate(
+      neglog10_fdr = -log10(pmax(fdr, 1e-320)),  # FDR==0 -> 320 으로 cap
+      direction = if_else(effect >= 0, "Positive", "Negative")
+    ) %>%
+    ## 지표 × 방향 조합마다 가장 유의한 top n_top term
+    group_by(metric, direction) %>%
+    slice_min(fdr, n = n_top, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(
+      facet_lab = factor(
+        paste0(metric, "\n", direction),
+        levels = as.vector(t(outer(metric_levels, dir_levels,
+                                    function(m, d) paste0(m, "\n", d))))
+      )
+    ) %>%
+    ## facet 별로 term 정렬이 독립적이도록 row 기반 factor 사용
+    arrange(facet_lab, neglog10_fdr) %>%
+    mutate(term_ord = factor(row_number(), levels = row_number(), labels = TERM))
+
+  p_go <- ggplot(
+    go_long,
+    aes(x = neglog10_fdr, y = term_ord)
+  ) +
+    geom_segment(
+      aes(x = 0, xend = neglog10_fdr, yend = term_ord, color = direction)
+    ) +
+    geom_point(aes(size = n_genes, color = direction)) +
+    facet_wrap(~ facet_lab, scales = "free_y", ncol = 2) +
+    scale_color_manual(
+      values = c(Positive = "firebrick", Negative = "steelblue"),
+      name = "Effect direction"
+    ) +
+    scale_size_continuous(range = c(2, 9), name = "Number of genes") +
+    labs(
+      title = paste0(
+        "GO ", ont_full_name[[ont]],
+        " enrichment for CLIP and ribosome profiling (top ", n_top,
+        " per direction)"
+      ),
+      x = "-log10(FDR)",
+      y = NULL
+    ) +
+    theme_bw(base_size = 12) +
+    theme(
+      panel.grid.major.y = element_blank(),
+      plot.title = element_text(face = "bold")
+    )
+
+  ggsave(
+    file.path(output_dir, paste0("GO_", ont, "_dotplot.png")),
+    p_go,
+    width = 16,
+    height = 8,
     dpi = 900
   )
 
