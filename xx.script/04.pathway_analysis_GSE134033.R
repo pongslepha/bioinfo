@@ -277,13 +277,20 @@ all_genes_go <- gene_stat_go %>%
 ont_full_name <- c(
   CC = "Cellular Component",
   BP = "Biological Process",
-  MF = "Molecular Function"
+  MF = "Molecular Function",
+  ALL = "All ontologies (CC + BP + MF)"
 )
 
+## 한 ontology 에 대해 group-wise Wilcoxon 검정 -> 통계표 + plot 저장.
+## ont == "ALL" 이면 세 ontology 를 구분 없이 합쳐서 분석한다. (원본 03 과 동일)
 run_go_ontology <- function(ont) {
   message("== GO ", ont, " analysis ==")
 
-  go_map <- go_map_all %>% filter(ONTOLOGY == ont)
+  go_map <- if (ont == "ALL") {
+    go_map_all
+  } else {
+    go_map_all %>% filter(ONTOLOGY == ont)
+  }
 
   go_term_names <- AnnotationDbi::select(
     GO.db,
@@ -320,7 +327,7 @@ run_go_ontology <- function(ont) {
       combined_fdr = pmin(clip_fdr, expr_fdr, na.rm = TRUE),
       neglog10_fdr = -log10(combined_fdr)
     ) %>%
-    filter(n_genes >= 10, n_genes <= 3000, combined_fdr < 0.05) %>%
+    filter(n_genes >= 10, n_genes <= 500, combined_fdr < 0.05) %>%
     arrange(combined_fdr)
 
   write_csv(
@@ -367,8 +374,10 @@ run_go_ontology <- function(ont) {
   ## term 을 -log10(FDR) lollipop 으로 표시. 점 크기 = 유전자 수.
   n_top <- 10
 
-  metric_levels <- c("CLIP enrichment", "Expression change (KO)")
-  dir_levels    <- c("Positive", "Negative")
+  ## facet_wrap(ncol = 2) 은 panel 을 행 우선(row-major)으로 채우므로,
+  ## level 순서를 row1=Negative, row2=Positive / col1=CLIP, col2=Expression 으로 맞춘다.
+  metric_levels <- c("CLIP enrichment", "Expression change (KO)")  # column 순서
+  dir_levels    <- c("Negative", "Positive")                       # row 순서
 
   go_long <- bind_rows(
     go_stats %>% transmute(
@@ -391,8 +400,9 @@ run_go_ontology <- function(ont) {
     mutate(
       facet_lab = factor(
         paste0(metric, "\n", direction),
-        levels = as.vector(t(outer(metric_levels, dir_levels,
-                                    function(m, d) paste0(m, "\n", d))))
+        ## row(direction) 별로 column(metric) 을 채워 row-major 순서를 만든다.
+        levels = as.vector(t(outer(dir_levels, metric_levels,
+                                    function(d, m) paste0(m, "\n", d))))
       )
     ) %>%
     arrange(facet_lab, neglog10_fdr) %>%
@@ -429,7 +439,7 @@ run_go_ontology <- function(ont) {
   go_stats
 }
 
-go_results <- lapply(c("CC", "BP", "MF"), run_go_ontology)
-names(go_results) <- c("CC", "BP", "MF")
+go_results <- lapply(c("CC", "BP", "MF", "ALL"), run_go_ontology)
+names(go_results) <- c("CC", "BP", "MF", "ALL")
 
 message("Done. Outputs written to: ", normalizePath(output_dir, mustWork = FALSE))
