@@ -93,6 +93,6 @@ result:
     GO_combined_dotplot_top15.csv
 
     # comparison (01.result/own_analysis/comparison_between_datasets/)
-    GO_CLIP_enrichment_comparison_top5.png
-    GO_CLIP_enrichment_comparison_top5.csv
+    GO_{ALL,CC,BP,MF}_CLIP_enrichment_comparison_top5.png
+    GO_{ALL,CC,BP,MF}_CLIP_enrichment_comparison_top5.csv
 
