@@ -66,7 +66,7 @@ script:
 
 result:
 
-    # GSE37114 (01.result/own_analysis/)
+    # GSE37114 (01.result/own_analysis/GSE37114_analysis/)
     gene_level_CLIP_RPF_localization_table.csv
     localization_group_summary_and_test.csv
     localization_group_bubble_plot.png

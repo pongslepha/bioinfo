@@ -45,7 +45,7 @@ cat("Working directory set to:", getwd(), "\n")
 
 result_dir <- "../01.result"
 data_dir   <- "../00.data"
-output_dir <- "../01.result/own_analysis"
+output_dir <- "../01.result/own_analysis/GSE37114_analysis"
 
 read_count_file <- file.path(result_dir, "read-counts.txt")
 gtf_file        <- file.path(data_dir, "gencode.vM27.annotation.gtf.gz")
