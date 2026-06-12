@@ -19,10 +19,10 @@
 ##     컬럼: GO, n_genes, mean_clip_enrichment, clip_p, clip_fdr,
 ##           TERM, ontology, neglog10_fdr ...
 ##
-## 출력 (Positive / Negative 를 한 그림에 위/아래 패널로):
+## 출력 (ontology 별로, 방향 구분 없이 한 그림, GSE37114 순 정렬):
 ##   ../01.result/own_analysis/comparison_between_datasets/
-##     GO_CLIP_enrichment_comparison_top5.png
-##     GO_CLIP_enrichment_comparison_top5.csv  (그림에 쓰인 long table)
+##     GO_{ALL,CC,BP,MF}_CLIP_enrichment_comparison_top5.png
+##     GO_{ALL,CC,BP,MF}_CLIP_enrichment_comparison_top5.csv  (long table)
 ##
 ## 실행:
 ##   ~/miniconda3/envs/lab/bin/Rscript xx.script/07.comparison_between_dataset.R
@@ -56,9 +56,18 @@ base_dir   <- "../01.result/own_analysis"
 output_dir <- file.path(base_dir, "comparison_between_datasets")
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
-N_TOP    <- 5         # 데이터셋 × 방향 별 상위 term 개수
-ONTOLOGY <- "ALL"     # CC+BP+MF 합친 통계표 사용 (03/04/05 의 ALL 과 동일)
-FDR_CUT  <- 0.05
+N_TOP      <- 5       # 데이터셋 × 방향 별 상위 term 개수
+FDR_CUT    <- 0.05
+ref_ds     <- "GSE37114"   # y 축 정렬 기준 데이터셋
+## ALL(CC+BP+MF 합본) 과 개별 ontology 각각에 대해 그린다
+ONTOLOGIES <- c("ALL", "CC", "BP", "MF")
+
+ont_full_name <- c(
+  ALL = "All ontologies (CC + BP + MF)",
+  CC  = "Cellular Component",
+  BP  = "Biological Process",
+  MF  = "Molecular Function"
+)
 
 ## 데이터셋 표시 순서 / 라벨
 datasets <- tribble(
@@ -69,139 +78,126 @@ datasets <- tribble(
 )
 
 ############################################################
-## 1. 각 데이터셋의 전체 GO 통계표(gotable) 로드 + CLIP enrichment 부분만
+## 한 ontology 에 대해 gotable -> topn -> gotable2 -> dot plot
 ############################################################
-## seurat 의 gotable 에 해당. 여기서는 "CLIP enrichment" 지표만 비교하므로
-## clip_fdr / mean_clip_enrichment 만 long 형태로 가져온다.
-load_one <- function(ds_name, ds_dir) {
-  stats_path <- file.path(base_dir, ds_dir,
-                          paste0("GO_", ONTOLOGY, "_enrichment_stats.csv"))
-  if (!file.exists(stats_path)) {
-    warning("missing: ", stats_path)
-    return(NULL)
+## seurat 03 의 pathway dot plot 과 동일한 흐름:
+##   gotable  : 세 데이터셋의 GO_<ont>_enrichment_stats.csv (CLIP enrichment 부분)
+##   topn     : 데이터셋 × 방향 별 top N term (그림은 방향으로 나누지 않음)
+##   gotable2 : 선택된 term 을 유의한(fdr<0.05) 모든 데이터셋 셀에 표시
+##   plot     : x=데이터셋, y=GO term, size=-log10(FDR), color=CLIP effect(log2)
+##              y 축은 GSE37114 의 CLIP enrichment effect 순으로 정렬
+run_ontology <- function(ont) {
+  cat("\n== GO ", ont, " ==\n", sep = "")
+
+  ## --- 1. gotable: 세 데이터셋 통계표 로드 + CLIP enrichment long ---
+  load_one <- function(ds_name, ds_dir) {
+    stats_path <- file.path(base_dir, ds_dir,
+                            paste0("GO_", ont, "_enrichment_stats.csv"))
+    if (!file.exists(stats_path)) {
+      warning("missing: ", stats_path)
+      return(NULL)
+    }
+    readr::read_csv(stats_path, show_col_types = FALSE) %>%
+      transmute(
+        dataset      = ds_name,
+        GO, TERM, n_genes,
+        effect       = mean_clip_enrichment,
+        fdr          = clip_fdr,
+        neglog10_fdr = -log10(pmax(clip_fdr, 1e-320)),
+        direction    = if_else(mean_clip_enrichment >= 0, "Positive", "Negative")
+      )
   }
-  readr::read_csv(stats_path, show_col_types = FALSE) %>%
-    transmute(
-      dataset      = ds_name,
-      GO, TERM, n_genes,
-      effect       = mean_clip_enrichment,
-      fdr          = clip_fdr,
-      neglog10_fdr = -log10(pmax(clip_fdr, 1e-320)),
-      direction    = if_else(mean_clip_enrichment >= 0, "Positive", "Negative")
+
+  gotable <- purrr::pmap_dfr(list(datasets$dataset, datasets$dir), load_one)
+  if (nrow(gotable) == 0) {
+    message("  [skip] no data for ontology: ", ont)
+    return(invisible(NULL))
+  }
+
+  ## --- 2. topn: 데이터셋 × 방향 별 top N term (합집합) ---
+  topn <- gotable %>%
+    filter(fdr < FDR_CUT) %>%
+    group_by(dataset, direction) %>%
+    slice_min(fdr, n = N_TOP, with_ties = FALSE) %>%
+    ungroup() %>%
+    distinct(GO, TERM)
+
+  ## --- 3. gotable2: 선택 term 의 유의한 모든 데이터셋 셀 ---
+  plot_df <- topn %>%
+    left_join(
+      gotable %>% dplyr::select(dataset, GO, n_genes, effect, fdr, neglog10_fdr),
+      by = "GO", relationship = "many-to-many"
+    ) %>%
+    filter(fdr < FDR_CUT) %>%
+    mutate(dataset = factor(dataset, levels = datasets$dataset))
+
+  cat("  selected terms: ", n_distinct(plot_df$TERM), "\n", sep = "")
+
+  ## y 축(term) 정렬: GSE37114 의 CLIP enrichment effect 순(양성 위, 음성 아래).
+  ## GSE37114 에서 유의하지 않은 term(ref_effect=NA)은 맨 아래로.
+  term_order <- plot_df %>%
+    filter(dataset == ref_ds) %>%
+    distinct(TERM, effect) %>%
+    dplyr::rename(ref_effect = effect)
+
+  term_levels <- plot_df %>%
+    distinct(TERM) %>%
+    left_join(term_order, by = "TERM") %>%
+    arrange(ref_effect) %>%
+    pull(TERM)
+
+  plot_df <- plot_df %>% mutate(TERM = factor(TERM, levels = term_levels))
+
+  ## 그림에 쓰인 long table 저장
+  readr::write_csv(
+    plot_df %>%
+      arrange(dataset, desc(neglog10_fdr)) %>%
+      dplyr::select(TERM, GO, dataset, n_genes, effect, fdr, neglog10_fdr),
+    file.path(output_dir,
+              paste0("GO_", ont, "_CLIP_enrichment_comparison_top", N_TOP, ".csv"))
+  )
+
+  ## --- 4. dot plot (seurat 540~565 라인 스타일) ---
+  p <- ggplot(plot_df,
+              aes(x = dataset, y = TERM,
+                  size = neglog10_fdr, color = effect)) +
+    geom_point() +
+    scale_size_continuous(range = c(1.5, 7), name = "-log10(FDR)") +
+    scale_color_gradient2(
+      low = "steelblue", mid = "grey90", high = "firebrick",
+      midpoint = 0, name = "Mean CLIP\nenrichment (log2)"
+    ) +
+    labs(
+      x = NULL, y = NULL,
+      title = paste0("LIN28 CLIP enrichment GO terms across datasets — ",
+                     ont_full_name[[ont]]),
+      subtitle = paste0("top ", N_TOP, " per direction per dataset; ",
+                        "ordered by ", ref_ds,
+                        " CLIP enrichment; dot shown where FDR < 0.05")
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(
+      panel.grid.major = element_line(color = "grey92"),
+      axis.text.x      = element_text(angle = 0, vjust = 1, hjust = 0.5,
+                                      face = "bold"),
+      axis.text.y      = element_text(size = 7),
+      plot.title       = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle    = element_text(hjust = 0.5, size = 7),
+      legend.position  = "right",
+      legend.title     = element_text(size = 8)
     )
+
+  n_terms <- n_distinct(plot_df$TERM)
+  plot_h  <- max(5, 0.2 * n_terms + 2)
+
+  ggsave(
+    file.path(output_dir,
+              paste0("GO_", ont, "_CLIP_enrichment_comparison_top", N_TOP, ".png")),
+    p, width = 9, height = plot_h, dpi = 900, units = "in", limitsize = FALSE
+  )
 }
 
-gotable <- purrr::pmap_dfr(
-  list(datasets$dataset, datasets$dir),
-  load_one
-)
+for (ont in ONTOLOGIES) run_ontology(ont)
 
-stopifnot(nrow(gotable) > 0)
-cat("Loaded GO stats rows:", nrow(gotable),
-    "from", n_distinct(gotable$dataset), "datasets\n")
-
-############################################################
-## 2. topn : 데이터셋 × 방향 별 top N term 선택 (seurat 의 topn)
-############################################################
-## 각 데이터셋에서 CLIP enrichment 가 가장 유의한 term 을 Positive / Negative
-## 방향마다 N_TOP 개씩 뽑는다. 이 term 들이 그림의 y 축 후보가 된다.
-topn <- gotable %>%
-  filter(fdr < FDR_CUT) %>%
-  group_by(dataset, direction) %>%
-  slice_min(fdr, n = N_TOP, with_ties = FALSE) %>%
-  ungroup() %>%
-  ## term 은 어느 한 방향으로 선택되면 그 방향 패널에 들어간다.
-  distinct(direction, GO, TERM)
-
-cat("Selected (direction, GO) pairs:", nrow(topn), "\n")
-
-############################################################
-## 3. gotable2 : 선택된 term 을, 유의한(=fdr<0.05) 모든 데이터셋 셀에서
-##              표시 (seurat 의 gotable2)
-############################################################
-## 한 term 이 GSE39872 에서만 top5 이었더라도, 다른 데이터셋에서 유의하면
-## 그 데이터셋 칸에도 점을 찍어 데이터셋 간 비교가 되게 한다.
-plot_df <- topn %>%
-  ## facet 은 "선택된 방향" 기준 (Positive / Negative 패널)
-  dplyr::rename(facet_direction = direction) %>%
-  left_join(
-    gotable %>% dplyr::select(dataset, GO, n_genes, effect, fdr, neglog10_fdr),
-    by = "GO", relationship = "many-to-many"
-  ) %>%
-  filter(fdr < FDR_CUT) %>%
-  mutate(
-    dataset         = factor(dataset, levels = datasets$dataset),
-    facet_direction = factor(facet_direction, levels = c("Positive", "Negative"))
-  )
-
-## y 축(term) 정렬: 패널마다 독립적으로 가장 강한 신호(neglog10_fdr) 순.
-## 같은 term 이 Positive / Negative 두 패널에 모두 나올 수 있으므로
-## "facet||TERM" 을 factor key 로 써서 패널별 정렬을 보장한다.
-term_order <- plot_df %>%
-  group_by(facet_direction, TERM) %>%
-  summarise(ord_val = max(neglog10_fdr), .groups = "drop") %>%
-  arrange(facet_direction, ord_val)
-
-plot_df <- plot_df %>%
-  mutate(
-    y_key = factor(
-      paste(facet_direction, TERM, sep = "||"),
-      levels = paste(term_order$facet_direction, term_order$TERM, sep = "||")
-    )
-  )
-
-## 그림에 쓰인 long table 저장
-readr::write_csv(
-  plot_df %>%
-    arrange(facet_direction, desc(neglog10_fdr), dataset) %>%
-    dplyr::select(facet_direction, TERM, GO, dataset,
-                  n_genes, effect, fdr, neglog10_fdr),
-  file.path(output_dir, "GO_CLIP_enrichment_comparison_top5.csv")
-)
-
-############################################################
-## 4. 통합 dot plot (seurat 540~565 라인 스타일)
-##    x = 데이터셋, y = GO term, size = -log10(FDR), color = CLIP effect(log2)
-############################################################
-p <- ggplot(plot_df,
-            aes(x = dataset, y = y_key,
-                size = neglog10_fdr, color = effect)) +
-  geom_point() +
-  facet_grid(facet_direction ~ ., scales = "free_y", space = "free_y") +
-  scale_y_discrete(labels = function(x) sub("^.*\\|\\|", "", x)) +
-  scale_size_continuous(range = c(1.5, 7), name = "-log10(FDR)") +
-  ## 효과 방향이 보이도록 발산형(diverging) 팔레트, 0 을 흰색으로
-  scale_color_gradient2(
-    low = "steelblue", mid = "grey90", high = "firebrick",
-    midpoint = 0, name = "Mean CLIP\nenrichment (log2)"
-  ) +
-  labs(
-    x = NULL, y = NULL,
-    title = paste0("LIN28 CLIP enrichment GO terms across datasets",
-                   " (top ", N_TOP, " per direction per dataset)"),
-    subtitle = "GO_ALL_enrichment_stats; dot shown where FDR < 0.05"
-  ) +
-  theme_minimal(base_size = 9) +
-  theme(
-    panel.grid.major   = element_line(color = "grey92"),
-    axis.text.x        = element_text(angle = 0, vjust = 1, hjust = 0.5,
-                                       face = "bold"),
-    axis.text.y        = element_text(size = 7),
-    strip.text         = element_text(face = "bold"),
-    plot.title         = element_text(face = "bold", hjust = 0.5),
-    plot.subtitle      = element_text(hjust = 0.5, size = 7),
-    legend.position    = "right",
-    legend.title       = element_text(size = 8)
-  )
-
-## 패널별 term 수에 맞춰 세로 길이 자동 조정
-n_terms <- n_distinct(plot_df$y_key)
-plot_h  <- max(5, 0.2 * n_terms + 2)
-
-ggsave(
-  file.path(output_dir, "GO_CLIP_enrichment_comparison_top5.png"),
-  p, width = 9, height = plot_h, dpi = 900, units = "in", limitsize = FALSE
-)
-
-cat("Done. Outputs written to:",
+cat("\nDone. Outputs written to:",
     normalizePath(output_dir, mustWork = FALSE), "\n")
