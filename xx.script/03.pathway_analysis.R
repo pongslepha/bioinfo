@@ -337,9 +337,10 @@ ggsave(
 )
 
 ############################################################
-## 14. GO CC Figure 5A-like plot
+## 14. GO enrichment Figure 5A-like plots (CC / BP / MF)
 ############################################################
-## localization 파일과 별개로 GO Cellular Component 기반 plot도 생성
+## localization 파일과 별개로 GO Cellular Component / Biological
+## Process / Molecular Function 각 ontology 별로 동일한 분석/plot 생성.
 ############################################################
 
 gene_map <- AnnotationDbi::select(
@@ -354,134 +355,151 @@ gene_stat_go <- gene_stat %>%
   left_join(gene_map, by = c("ensembl_gene_id" = "ENSEMBL")) %>%
   filter(!is.na(ENTREZID))
 
-ont_use <- "CC"
-
-go_map <- AnnotationDbi::select(
+## GO 매핑은 세 ontology 공통이므로 한 번만 가져온 뒤 ontology 별로 나눈다.
+go_map_all <- AnnotationDbi::select(
   org.Mm.eg.db,
   keys = unique(gene_stat_go$ENTREZID),
   keytype = "ENTREZID",
   columns = c("GO", "ONTOLOGY")
 ) %>%
-  filter(!is.na(GO), ONTOLOGY == ont_use) %>%
+  filter(!is.na(GO)) %>%
   distinct(ENTREZID, GO, .keep_all = TRUE)
-
-go_term_names <- AnnotationDbi::select(
-  GO.db,
-  keys = unique(go_map$GO),
-  keytype = "GOID",
-  columns = c("TERM")
-) %>%
-  distinct(GOID, .keep_all = TRUE)
-
-dat_go <- go_map %>%
-  inner_join(gene_stat_go, by = "ENTREZID")
 
 all_genes_go <- gene_stat_go %>%
   dplyr::select(ENTREZID, clip_enrichment, ribo_density_change) %>%
   distinct()
 
-test_one_go <- function(go_id) {
-  genes_in <- dat_go %>%
-    filter(GO == go_id) %>%
-    pull(ENTREZID) %>%
-    unique()
+ont_full_name <- c(
+  CC = "Cellular Component",
+  BP = "Biological Process",
+  MF = "Molecular Function"
+)
 
-  in_df <- all_genes_go %>% filter(ENTREZID %in% genes_in)
-  out_df <- all_genes_go %>% filter(!ENTREZID %in% genes_in)
+## 한 ontology 에 대해 group-wise Wilcoxon 검정 -> 통계표 + bubble plot 저장
+run_go_ontology <- function(ont) {
+  message("== GO ", ont, " analysis ==")
 
-  if (nrow(in_df) < 10 || nrow(out_df) < 10) {
-    return(NULL)
+  go_map <- go_map_all %>% filter(ONTOLOGY == ont)
+
+  go_term_names <- AnnotationDbi::select(
+    GO.db,
+    keys = unique(go_map$GO),
+    keytype = "GOID",
+    columns = c("TERM")
+  ) %>%
+    distinct(GOID, .keep_all = TRUE)
+
+  dat_go <- go_map %>%
+    inner_join(gene_stat_go, by = "ENTREZID")
+
+  test_one_go <- function(go_id) {
+    genes_in <- dat_go %>%
+      filter(GO == go_id) %>%
+      pull(ENTREZID) %>%
+      unique()
+
+    in_df <- all_genes_go %>% filter(ENTREZID %in% genes_in)
+    out_df <- all_genes_go %>% filter(!ENTREZID %in% genes_in)
+
+    if (nrow(in_df) < 10 || nrow(out_df) < 10) {
+      return(NULL)
+    }
+
+    tibble(
+      GO = go_id,
+      n_genes = nrow(in_df),
+      mean_clip_enrichment = mean(in_df$clip_enrichment, na.rm = TRUE),
+      mean_ribo_density_change = mean(in_df$ribo_density_change, na.rm = TRUE),
+      clip_p = wilcox.test(
+        in_df$clip_enrichment,
+        out_df$clip_enrichment
+      )$p.value,
+      ribo_p = wilcox.test(
+        in_df$ribo_density_change,
+        out_df$ribo_density_change
+      )$p.value
+    )
   }
 
-  tibble(
-    GO = go_id,
-    n_genes = nrow(in_df),
-    mean_clip_enrichment = mean(in_df$clip_enrichment, na.rm = TRUE),
-    mean_ribo_density_change = mean(in_df$ribo_density_change, na.rm = TRUE),
-    clip_p = wilcox.test(
-      in_df$clip_enrichment,
-      out_df$clip_enrichment
-    )$p.value,
-    ribo_p = wilcox.test(
-      in_df$ribo_density_change,
-      out_df$ribo_density_change
-    )$p.value
+  go_stats <- map_dfr(unique(dat_go$GO), test_one_go) %>%
+    left_join(go_term_names, by = c("GO" = "GOID")) %>%
+    mutate(
+      ontology = ont,
+      clip_fdr = p.adjust(clip_p, method = "BH"),
+      ribo_fdr = p.adjust(ribo_p, method = "BH"),
+      combined_fdr = pmin(clip_fdr, ribo_fdr, na.rm = TRUE),
+      neglog10_fdr = -log10(combined_fdr)
+    ) %>%
+    filter(
+      n_genes >= 10,
+      n_genes <= 3000,
+      combined_fdr < 0.05
+    ) %>%
+    arrange(combined_fdr)
+
+  write_csv(
+    go_stats,
+    file.path(output_dir, paste0("GO_", ont, "_enrichment_stats.csv"))
   )
+
+  ## 유의도 상위 25개 term 만 라벨링
+  label_go <- go_stats %>% slice_head(n = 25)
+
+  p_go <- ggplot(
+    go_stats %>% arrange(neglog10_fdr),  # 유의한(빨간) 점이 맨 위에 그려지도록
+    aes(
+      x = mean_clip_enrichment,
+      y = mean_ribo_density_change
+    )
+  ) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
+    geom_point(
+      aes(
+        size = n_genes,
+        color = neglog10_fdr
+      ),
+      alpha = 0.75
+    ) +
+    geom_text_repel(
+      data = label_go,
+      aes(label = paste0(TERM, " (", n_genes, ")")),
+      size = 3,
+      max.overlaps = Inf
+    ) +
+    scale_size_continuous(
+      range = c(2, 14),
+      name = "Number of genes"
+    ) +
+    scale_color_gradient(
+      low = "khaki1",
+      high = "red4",
+      name = "-log10(FDR)"
+    ) +
+    labs(
+      title = paste0(
+        "GO ", ont_full_name[[ont]],
+        " analysis for CLIP and ribosome profiling"
+      ),
+      x = "Mean LIN28A CLIP enrichment (log2)",
+      y = "Mean ribosome density change upon Lin28a knockdown (log2)"
+    ) +
+    theme_bw(base_size = 13) +
+    theme(
+      panel.grid = element_line(color = "grey85", linetype = "dashed"),
+      plot.title = element_text(face = "bold")
+    )
+
+  ggsave(
+    file.path(output_dir, paste0("GO_", ont, "_Figure5A_like.png")),
+    p_go,
+    width = 12,
+    height = 7,
+    dpi = 900
+  )
+
+  go_stats
 }
 
-go_stats <- map_dfr(unique(dat_go$GO), test_one_go) %>%
-  left_join(go_term_names, by = c("GO" = "GOID")) %>%
-  mutate(
-    clip_fdr = p.adjust(clip_p, method = "BH"),
-    ribo_fdr = p.adjust(ribo_p, method = "BH"),
-    combined_fdr = pmin(clip_fdr, ribo_fdr, na.rm = TRUE),
-    neglog10_fdr = -log10(combined_fdr)
-  ) %>%
-  filter(
-    n_genes >= 10,
-    n_genes <= 3000,
-    combined_fdr < 0.05
-  ) %>%
-  arrange(combined_fdr)
-
-label_go <- go_stats %>%
-  filter(
-    combined_fdr < 1e-5 |
-      str_detect(
-        str_to_lower(TERM),
-        "endoplasmic|membrane|golgi|extracellular|cytoplasm|nucleus|mitochond"
-      )
-  ) %>%
-  slice_head(n = 30)
-
-p_go <- ggplot(
-  go_stats,
-  aes(
-    x = mean_clip_enrichment,
-    y = mean_ribo_density_change
-  )
-) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
-  geom_point(
-    aes(
-      size = n_genes,
-      color = neglog10_fdr
-    ),
-    alpha = 0.75
-  ) +
-  geom_text_repel(
-    data = label_go,
-    aes(label = paste0(TERM, " (", n_genes, ")")),
-    size = 3,
-    max.overlaps = Inf
-  ) +
-  scale_size_continuous(
-    range = c(2, 14),
-    name = "Number of genes"
-  ) +
-  scale_color_gradient(
-    low = "khaki1",
-    high = "red4",
-    name = "-log10(FDR)"
-  ) +
-  labs(
-    title = "GO Cellular Component analysis for CLIP and ribosome profiling",
-    x = "Mean LIN28A CLIP enrichment (log2)",
-    y = "Mean ribosome density change upon Lin28a knockdown (log2)"
-  ) +
-  theme_bw(base_size = 13) +
-  theme(
-    panel.grid = element_line(color = "grey85", linetype = "dashed"),
-    plot.title = element_text(face = "bold")
-  )
-
-print(p_go)
-
-ggsave(
-  file.path(output_dir, "GO_CC_Figure5A_like_with_localization_context.png"),
-  p_go,
-  width = 12,
-  height = 7,
-  dpi = 900
-)
+go_results <- lapply(c("CC", "BP", "MF"), run_go_ontology)
+names(go_results) <- c("CC", "BP", "MF")
